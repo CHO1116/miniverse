@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>학교</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #9fd4f5; font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; }
+  canvas { display: block; touch-action: none; }
+  #place {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    padding: 5px 16px; border-radius: 999px;
+    background: rgba(255,255,255,.78); color: #23324a;
+    font-size: 13px; font-weight: 600; letter-spacing: .08em;
+    box-shadow: 0 2px 10px rgba(0,0,0,.12); backdrop-filter: blur(6px);
+    pointer-events: none; user-select: none;
+  }
+  #sound {
+    position: fixed; top: 12px; left: 12px;
+    border: 0; border-radius: 999px; padding: 7px 12px;
+    background: rgba(255,255,255,.78); color: #23324a;
+    font: 600 13px inherit; font-family: inherit; cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0,0,0,.12); backdrop-filter: blur(6px);
+  }
+  #sound:hover { background: rgba(255,255,255,.95); }
+  #hint {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    padding: 6px 14px; border-radius: 10px; max-width: calc(100% - 32px); box-sizing: border-box;
+    background: rgba(20,30,50,.45); color: #fff; font-size: 12px; text-align: center;
+    pointer-events: none; user-select: none; transition: opacity 1s;
+  }
+  :root { --js: min(124px, 30vmin); --bt: min(66px, 16vmin); --gap: 18px; }
+  #touch { display: none; }
+  .touch #touch { display: block; }
+  .touch #hint { bottom: auto; top: 50px; }
+  #joy {
+    position: fixed; z-index: 5;
+    left: calc(var(--gap) + env(safe-area-inset-left));
+    bottom: calc(var(--gap) + env(safe-area-inset-bottom));
+    width: var(--js); height: var(--js); border-radius: 50%;
+    background: rgba(255,255,255,.2); border: 2px solid rgba(255,255,255,.6);
+    box-shadow: 0 2px 12px rgba(0,0,0,.15); touch-action: none;
+  }
+  #knob {
+    position: absolute; left: 50%; top: 50%; width: 44%; height: 44%; margin: -22% 0 0 -22%;
+    border-radius: 50%; background: rgba(255,255,255,.9); box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    pointer-events: none;
+  }
+  #btns {
+    position: fixed; z-index: 5;
+    right: calc(var(--gap) + env(safe-area-inset-right));
+    bottom: calc(var(--gap) + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; align-items: flex-end; gap: 12px;
+  }
+  .tbtn {
+    width: var(--bt); height: var(--bt); border-radius: 50%; padding: 0;
+    border: 2px solid rgba(255,255,255,.65); background: rgba(30,45,70,.45); color: #fff;
+    font: 700 13px system-ui, "Malgun Gothic", sans-serif; touch-action: none;
+    user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  #jumpBtn { width: calc(var(--bt) * 1.2); height: calc(var(--bt) * 1.2); }
+  .tbtn.on, .tbtn:active { background: rgba(228,87,61,.85); }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="place">학교</div>
+<button id="sound" type="button">🔇 소리 켜기</button>
+<div id="hint">W·↑ 앞으로 · S·↓ 뒤로 · A D·← → 방향 틀기 · Shift 달리기 · Space 점프 · 드래그로 둘러보기</div>
+<div id="touch">
+  <div id="joy"><div id="knob"></div></div>
+  <div id="btns">
+    <button class="tbtn" id="runBtn" type="button">달리기</button>
+    <button class="tbtn" id="jumpBtn" type="button">점프</button>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ---------- 기본 설정 ---------- */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fd4f5);
+scene.fog = new THREE.Fog(0x9fd4f5, 70, 170);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 400);
+
+scene.add(new THREE.HemisphereLight(0xe4f4ff, 0x5f8a45, 1.4));
+const sun = new THREE.DirectionalLight(0xfff1d8, 2.6);
+sun.position.set(35, 55, 25);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -70, right: 70, top: 70, bottom: -70, near: 1, far: 160 });
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+
+/* ---------- 도형 도우미 (상자·원기둥·원뿔·공) ---------- */
+const mats = {};
+const mat = c => mats[c] || (mats[c] = new THREE.MeshLambertMaterial({ color: c }));
+function put(geo, c, x, y, z, parent = scene) {
+  const m = new THREE.Mesh(geo, typeof c === 'number' ? mat(c) : c);
+  m.position.set(x, y, z);
+  m.castShadow = m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+const box  = (w, h, d, c, x, y, z, p) => put(new THREE.BoxGeometry(w, h, d), c, x, y, z, p);
+const cyl  = (rt, rb, h, c, x, y, z, p, seg = 16, open = false) => put(new THREE.CylinderGeometry(rt, rb, h, seg, 1, open), c, x, y, z, p);
+const cone = (r, h, c, x, y, z, p, seg = 12) => put(new THREE.ConeGeometry(r, h, seg), c, x, y, z, p);
+const ball = (r, c, x, y, z, p) => put(new THREE.SphereGeometry(r, 16, 12), c, x, y, z, p);
+
+/* 부딪히는 영역 (바닥 평면 기준 사각형) */
+const solids = [];
+const solid = (x, z, w, d, h = 3) => solids.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, h });
+/* 카메라가 넘어가면 안 되는 덩어리 (나무 잎 등) */
+const camSolids = [];
+const camSolid = (x, z, w, h) => camSolids.push({ x0: x - w / 2, x1: x + w / 2, z0: z - w / 2, z1: z + w / 2, h });
+const BOUND ={ x0: -43, x1: 43, z0: -37, z1: 33 };
+
+/* ---------- 땅 ---------- */
+const ground = box(300, 0.2, 300, 0x7cbf5a, 0, -0.1, 0);
+ground.castShadow = false;
+box(72, 0.1, 42, 0xd8b98b, 0, 0.05, 5).castShadow = false;           // 운동장 흙
+box(8, 0.11, 12, 0xbfb8aa, 0, 0.06, -16).castShadow = false;           // 현관 앞 길
+// 운동장 흰 선
+const line = 0xffffff;
+box(60, 0.02, 0.25, line, 0, 0.11, -12).castShadow = false;
+box(60, 0.02, 0.25, line, 0, 0.11, 22).castShadow = false;
+box(0.25, 0.02, 34, line, -30, 0.11, 5).castShadow = false;
+box(0.25, 0.02, 34, line, 30, 0.11, 5).castShadow = false;
+box(0.25, 0.02, 34, line, 0, 0.11, 5).castShadow = false;
+cyl(5, 5, 0.02, line, 0, 0.11, 5, scene, 48).castShadow = false;
+cyl(4.75, 4.75, 0.03, 0xd8b98b, 0, 0.115, 5, scene, 48).castShadow = false;
+
+/* ---------- 학교 건물 ---------- */
+const CREAM = 0xf2e7d0, BAND = 0xc7b394, ROOF = 0x8c5a43, GLASS = 0x86bde0, FRAME = 0xffffff;
+const bz = -29, front = bz + 6;
+box(50, 14, 12, CREAM, 0, 7, bz);
+box(50.6, 0.5, 12.6, BAND, 0, 4.9, bz);
+box(50.6, 0.5, 12.6, BAND, 0, 9.6, bz);
+box(51.2, 0.7, 13.2, ROOF, 0, 14.3, bz);
+solid(0, bz, 50, 12, 15);
+
+for (let f = 0; f < 3; f++) {
+  const y = 2.6 + f * 4.7;
+  for (let x = -22; x <= 22; x += 4) {
+    if (f === 0 && Math.abs(x) < 4) continue;          // 현관 자리
+    box(2.7, 2.3, 0.15, FRAME, x, y, front + 0.05);
+    box(2.3, 1.9, 0.2, GLASS, x, y, front + 0.08);
+    box(0.12, 1.9, 0.25, FRAME, x, y, front + 0.1);
+  }
+  // 옆면 창문
+  for (let z = bz - 4; z <= bz + 4; z += 4) {
+    for (const sx of [-1, 1]) {
+      box(0.2, 1.9, 2.3, GLASS, sx * 25.05, y, z);
+    }
+  }
+}
+
+// 가운데 시계탑
+box(9, 6, 9, CREAM, 0, 17.5, bz + 1.5);
+box(9.6, 0.5, 9.6, BAND, 0, 14.9, bz + 1.5);
+const towerRoof = cone(7.2, 4.5, ROOF, 0, 22.75, bz + 1.5, scene, 4);
+towerRoof.rotation.y = Math.PI / 4;
+const clockZ = bz + 1.5 + 4.5;
+const face = cyl(2.2, 2.2, 0.3, 0xffffff, 0, 17.5, clockZ + 0.1, scene, 32);
+face.rotation.x = Math.PI / 2;
+const rimC = cyl(2.45, 2.45, 0.2, 0x3b4a63, 0, 17.5, clockZ, scene, 32);
+rimC.rotation.x = Math.PI / 2;
+for (let i = 0; i < 12; i++) {
+  const a = i / 12 * Math.PI * 2;
+  box(0.14, i % 3 ? 0.25 : 0.45, 0.05, 0x23324a, Math.sin(a) * 1.85, 17.5 + Math.cos(a) * 1.85, clockZ + 0.28).rotation.z = -a;
+}
+const hourHand = new THREE.Group(); hourHand.position.set(0, 17.5, clockZ + 0.32); scene.add(hourHand);
+const minHand  = new THREE.Group(); minHand.position.set(0, 17.5, clockZ + 0.36); scene.add(minHand);
+box(0.22, 1.1, 0.05, 0x23324a, 0, 0.5, 0, hourHand);
+box(0.14, 1.7, 0.05, 0x23324a, 0, 0.8, 0, minHand);
+ball(0.15, 0xc0392b, 0, 17.5, clockZ + 0.4);
+
+// 현관
+box(6, 4.2, 0.3, 0x6b4a33, 0, 2.1, front + 0.1);
+box(0.15, 4.2, 0.35, 0x3d2a1d, 0, 2.1, front + 0.15);
+box(5.6, 3.2, 0.32, GLASS, 0, 2.2, front + 0.12).scale.set(0.95, 0.9, 1);
+box(9, 0.4, 4, 0xe9e2d2, 0, 4.8, front + 2);
+for (const sx of [-1, 1]) cyl(0.25, 0.25, 4.6, 0xffffff, sx * 4, 2.3, front + 3.6);
+box(8, 0.25, 2, 0xcfc8ba, 0, 0.125, front + 1);
+box(8, 0.12, 1, 0xcfc8ba, 0, 0.06, front + 2.4);
+solid(-4, front + 3.6, 0.6, 0.6); solid(4, front + 3.6, 0.6, 0.6);
+
+// 현판
+const sc = document.createElement('canvas'); sc.width = 512; sc.height = 128;
+const sx2 = sc.getContext('2d');
+sx2.fillStyle = '#1f3a5f'; sx2.fillRect(0, 0, 512, 128);
+sx2.strokeStyle = '#d9b860'; sx2.lineWidth = 8; sx2.strokeRect(8, 8, 496, 112);
+sx2.fillStyle = '#fff'; sx2.font = 'bold 76px "Malgun Gothic", sans-serif';
+sx2.textAlign = 'center'; sx2.textBaseline = 'middle'; sx2.fillText('학 교', 256, 68);
+const signTex = new THREE.CanvasTexture(sc); signTex.colorSpace = THREE.SRGBColorSpace;
+box(6, 1.5, 0.15, new THREE.MeshLambertMaterial({ map: signTex }), 0, 6.1, front + 0.1);
+
+/* ---------- 국기 게양대 ---------- */
+cyl(0.6, 0.8, 0.5, 0xbbbbbb, -14, 0.25, -17);
+cyl(0.1, 0.13, 11, 0xdddddd, -14, 5.5, -17);
+ball(0.25, 0xd4af37, -14, 11.1, -17);
+const flagPivot = new THREE.Group(); flagPivot.position.set(-14, 10, -17); scene.add(flagPivot);
+const flag = box(2.6, 1.6, 0.05, 0x2f6fc9, 1.35, 0, 0, flagPivot);
+ball(0.35, 0xffffff, 1.35, 0, 0.03, flagPivot).scale.set(1, 1, 0.1);
+solid(-14, -17, 1.4, 1.4);
+
+/* ---------- 축구 골대 ---------- */
+function goal(x, dir) {
+  const g = new THREE.Group(); g.position.set(x, 0, 5); scene.add(g);
+  for (const z of [-3.5, 3.5]) cyl(0.1, 0.1, 2.4, 0xffffff, 0, 1.2, z, g);
+  const bar = cyl(0.1, 0.1, 7.1, 0xffffff, 0, 2.4, 0, g); bar.rotation.x = Math.PI / 2;
+  for (const z of [-3.5, 3.5]) { const b = cyl(0.06, 0.06, 1.6, 0xeeeeee, dir * 0.8, 0.05, z, g); b.rotation.z = Math.PI / 2; }
+  const net = box(0.05, 2.4, 7, new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 }), dir * 1.6, 1.2, 0, g);
+  net.castShadow = false;
+  solid(x + dir * 0.8, 5 - 3.5, 1.8, 0.4); solid(x + dir * 0.8, 5 + 3.5, 1.8, 0.4); solid(x + dir * 1.6, 5, 0.4, 7);
+}
+goal(-30, -1); goal(30, 1);
+const soccerBall = ball(0.3, 0xffffff, 4, 0.3, 8);
+
+/* ---------- 농구 골대 ---------- */
+{
+  const x = -36, z = -8;
+  cyl(0.15, 0.18, 4, 0x3c6e9e, x, 2, z);
+  box(0.15, 1.3, 1.9, 0xffffff, x + 0.4, 4.2, z);
+  box(0.17, 0.5, 0.6, 0xd35400, x + 0.42, 3.9, z).material = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x111111 });
+  const rim = cyl(0.35, 0.35, 0.05, 0xe67e22, x + 0.85, 3.7, z, scene, 20, true);
+  rim.material = new THREE.MeshLambertMaterial({ color: 0xe67e22, side: THREE.DoubleSide });
+  ball(0.25, 0xd35400, x + 2, 0.25, z + 1.5);
+  solid(x, z, 0.6, 0.6);
+}
+
+/* ---------- 놀이기구 (미끄럼틀) ---------- */
+{
+  const x = 36, z = -6;
+  for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) cyl(0.12, 0.12, 2.6, 0xe74c3c, x + dx, 1.3, z + dz);
+  box(2.4, 0.2, 2.4, 0xf1c40f, x, 2.5, z);
+  const roofP = cone(2, 1.4, 0x3498db, x, 4.2, z, scene, 4); roofP.rotation.y = Math.PI / 4;
+  for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) cyl(0.06, 0.06, 1.0, 0xe74c3c, x + dx, 3.0, z + dz);
+  const slide = box(1.2, 0.15, 4.6, 0x2ecc71, x, 1.3, z + 3.1); slide.rotation.x = 0.55;
+  for (let i = 0; i < 5; i++) box(1.2, 0.08, 0.12, 0xf39c12, x, 0.4 + i * 0.5, z - 1.5);
+  solid(x, z + 1.2, 2.8, 6.6);
+}
+
+/* ---------- 나무 ---------- */
+function pine(x, z, s = 1) {
+  cyl(0.25 * s, 0.35 * s, 1.6 * s, 0x7a5233, x, 0.8 * s, z);
+  cone(1.8 * s, 2.6 * s, 0x3f8f4a, x, 2.6 * s, z);
+  cone(1.4 * s, 2.2 * s, 0x4aa356, x, 3.8 * s, z);
+  cone(0.9 * s, 1.8 * s, 0x58b864, x, 4.9 * s, z);
+  solid(x, z, 0.9 * s, 0.9 * s);
+  camSolid(x, z, 3.4 * s, 6 * s);
+}
+function roundTree(x, z, s = 1, c = 0x5fae4e) {
+  cyl(0.25 * s, 0.35 * s, 2.4 * s, 0x7a5233, x, 1.2 * s, z);
+  ball(1.6 * s, c, x, 3.2 * s, z);
+  ball(1.1 * s, c, x + 0.9 * s, 2.8 * s, z + 0.4 * s);
+  ball(1.0 * s, c, x - 0.8 * s, 3.0 * s, z - 0.5 * s);
+  solid(x, z, 0.9 * s, 0.9 * s);
+  camSolid(x, z, 3.6 * s, 4.8 * s);
+}
+for (let x = -40; x <= 40; x += 8) { (Math.abs(x / 8) % 2 ? pine : roundTree)(x, 30, 1 + (x % 3) * 0.05); }
+for (let z = -12; z <= 22; z += 8) { roundTree(-41, z, 1.05, 0x6cbf58); pine(41, z + 4, 1.1); }
+roundTree(-34, -30, 1.2, 0xe8a1b8); roundTree(-30, -34, 1, 0xf0b3c6);   // 벚나무
+roundTree(32, -30, 1.2, 0xe8a1b8);  roundTree(37, -33, 1, 0xf0b3c6);
+pine(-40, -20, 1.2); pine(40, -22, 1.2);
+
+/* ---------- 벤치 ---------- */
+function bench(x, z, rot = 0) {
+  const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = rot; scene.add(g);
+  box(2.4, 0.12, 0.6, 0xb07a45, 0, 0.55, 0, g);
+  box(2.4, 0.5, 0.1, 0xb07a45, 0, 0.95, -0.28, g);
+  for (const dx of [-1, 1]) box(0.1, 0.55, 0.5, 0x555555, dx * 1.05, 0.27, 0, g);
+  const w = Math.abs(Math.sin(rot)) > 0.5 ? [0.8, 2.6] : [2.6, 0.8];
+  solid(x, z, w[0], w[1]);
+}
+bench(-20, 26.5); bench(-10, 26.5); bench(10, 26.5); bench(20, 26.5);
+bench(-38, 8, Math.PI / 2); bench(38, 12, -Math.PI / 2);
+
+/* ---------- 울타리와 교문 ---------- */
+function fenceLine(x0, z0, x1, z1, gap) {
+  const len = Math.hypot(x1 - x0, z1 - z0), n = Math.round(len / 3);
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+    if (gap && gap(x, z)) continue;
+    cyl(0.1, 0.1, 1.4, 0x2e7d5b, x, 0.7, z, scene, 8);
+  }
+  const horiz = Math.abs(z1 - z0) < 0.01;
+  const seg = (a, b) => {
+    const l = b - a, m = (a + b) / 2;
+    for (const y of [0.5, 1.15]) horiz ? box(l, 0.1, 0.08, 0x2e7d5b, m, y, z0) : box(0.08, 0.1, l, 0x2e7d5b, x0, y, m);
+  };
+  if (horiz && gap) { seg(x0, -5); seg(5, x1); } else seg(horiz ? x0 : z0, horiz ? x1 : z1);
+}
+fenceLine(-45, 35, 45, 35, x => Math.abs(x) < 5);
+fenceLine(-45, -40, 45, -40);
+fenceLine(-45, -40, -45, 35);
+fenceLine(45, -40, 45, 35);
+for (const sx of [-1, 1]) { box(1.2, 3, 1.2, 0xa89f91, sx * 5.6, 1.5, 35); ball(0.5, 0xd9d2c4, sx * 5.6, 3.4, 35); }
+
+/* ---------- 구름 ---------- */
+const clouds = [];
+for (let i = 0; i < 9; i++) {
+  const g = new THREE.Group();
+  const cm = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x888888 });
+  for (let k = 0; k < 4; k++) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(2 + Math.random() * 2, 12, 10), cm);
+    s.position.set(k * 2.6 - 4, Math.random() * 1.2, Math.random() * 2);
+    g.add(s);
+  }
+  g.position.set(-120 + Math.random() * 240, 35 + Math.random() * 15, -90 + Math.random() * 130);
+  g.userData.v = 0.6 + Math.random() * 0.8;
+  scene.add(g); clouds.push(g);
+}
+
+/* ---------- 사람 ---------- */
+function makePerson({ shirt, pants, skin = 0xf3cfaa, hair = 0x2b1d14, bag = null, scale = 1 }) {
+  const g = new THREE.Group(); g.scale.setScalar(scale); scene.add(g);
+  const body = new THREE.Group(); g.add(body);
+  const legs = [], arms = [];
+  for (const sx of [-1, 1]) {
+    const hip = new THREE.Group(); hip.position.set(sx * 0.17, 0.9, 0); body.add(hip);
+    box(0.24, 0.82, 0.26, pants, 0, -0.42, 0, hip);
+    box(0.26, 0.14, 0.38, 0x2a2a2a, 0, -0.84, 0.06, hip);
+    legs.push(hip);
+    const sh = new THREE.Group(); sh.position.set(sx * 0.46, 1.62, 0); body.add(sh);
+    cyl(0.09, 0.08, 0.66, shirt, 0, -0.33, 0, sh, 10);
+    ball(0.1, skin, 0, -0.7, 0, sh);
+    arms.push(sh);
+  }
+  cyl(0.31, 0.36, 0.82, shirt, 0, 1.3, 0, body);
+  ball(0.2, shirt, 0, 1.7, 0, body).scale.set(1.6, 0.6, 1.1);
+  cyl(0.08, 0.08, 0.15, skin, 0, 1.78, 0, body, 8);
+  const head = ball(0.28, skin, 0, 2.06, 0, body);
+  ball(0.3, hair, 0, 2.15, -0.04, body).scale.set(1, 0.8, 1);
+  for (const sx of [-1, 1]) ball(0.035, 0x1a1a1a, sx * 0.1, 2.08, 0.26, body);
+  if (bag) { box(0.5, 0.6, 0.24, bag, 0, 1.35, -0.42, body); box(0.4, 0.2, 0.06, bag, 0, 1.15, -0.55, body); }
+  return { g, body, legs, arms, head, phase: Math.random() * 6, speed: 0 };
+}
+function animatePerson(p, dt, moving, speed) {
+  p.speed += ((moving ? speed : 0) - p.speed) * Math.min(1, dt * 10);
+  const amt = Math.min(1, p.speed / 5);
+  p.phase += dt * p.speed * 1.9;
+  const s = Math.sin(p.phase) * 0.7 * amt;
+  p.legs[0].rotation.x = s; p.legs[1].rotation.x = -s;
+  p.arms[0].rotation.x = -s * 0.9; p.arms[1].rotation.x = s * 0.9;
+  p.body.position.y = Math.abs(Math.cos(p.phase)) * 0.07 * amt;
+}
+function turnToward(p, dx, dz, dt) {
+  const target = Math.atan2(dx, dz);
+  let d = target - p.g.rotation.y;
+  d = Math.atan2(Math.sin(d), Math.cos(d));
+  p.g.rotation.y += d * Math.min(1, dt * 10);
+}
+
+const player = makePerson({ shirt: 0xe4573d, pants: 0x2c3e66, bag: 0xf2c14e });
+player.g.position.set(0, 0, 14);
+player.g.rotation.y = Math.PI;
+
+const shirts = [0x3b82c4, 0x41a85f, 0xf0a030, 0x9b59b6, 0xffffff, 0x1abc9c, 0xf06292, 0x34495e];
+const hairs = [0x2b1d14, 0x1a1a1a, 0x4a2f1b, 0x2b1d14];
+const npcs = [];
+const randSpot = () => new THREE.Vector3(-32 + Math.random() * 64, 0, -14 + Math.random() * 40);
+for (let i = 0; i < 10; i++) {
+  const p = makePerson({
+    shirt: shirts[i % shirts.length], pants: i % 2 ? 0x2c3e66 : 0x4b4b4b,
+    hair: hairs[i % hairs.length], bag: i % 3 ? [0xe74c3c, 0x3498db, 0xf1c40f][i % 3] : null,
+    scale: 0.9 + Math.random() * 0.15,
+  });
+  p.g.position.copy(randSpot());
+  p.target = randSpot(); p.wait = Math.random() * 3; p.stuck = 0;
+  npcs.push(p);
+}
+
+/* ---------- 충돌 ---------- */
+function collide(pos, r) {
+  for (const s of solids) {
+    if (pos.x > s.x0 - r && pos.x < s.x1 + r && pos.z > s.z0 - r && pos.z < s.z1 + r) {
+      const dl = pos.x - (s.x0 - r), dr = (s.x1 + r) - pos.x, dt = pos.z - (s.z0 - r), db = (s.z1 + r) - pos.z;
+      const m = Math.min(dl, dr, dt, db);
+      if (m === dl) pos.x = s.x0 - r; else if (m === dr) pos.x = s.x1 + r;
+      else if (m === dt) pos.z = s.z0 - r; else pos.z = s.z1 + r;
+    }
+  }
+  pos.x = Math.max(BOUND.x0, Math.min(BOUND.x1, pos.x));
+  pos.z = Math.max(BOUND.z0, Math.min(BOUND.z1, pos.z));
+}
+
+/* ---------- 조작 ---------- */
+const keys = new Set();
+let jumpQueued = false, runToggle = false;
+addEventListener('keydown', e => {
+  keys.add(e.code); startAudio();
+  if (e.code === 'Space' && !e.repeat) jumpQueued = true;
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+
+/* 휴대폰: 조이스틱과 단추 */
+const isTouch = () => matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+function enableTouchUI() {
+  if (document.body.classList.contains('touch')) return;
+  document.body.classList.add('touch');
+  hintEl.textContent = '왼쪽 조이스틱으로 걷기 · 오른쪽 단추로 점프·달리기';
+}
+const hintEl = document.getElementById('hint');
+if (isTouch()) enableTouchUI();
+addEventListener('touchstart', enableTouchUI, { once: true, passive: true });
+
+const joyEl = document.getElementById('joy'), knob = document.getElementById('knob');
+const joy = { x: 0, y: 0, id: null };
+function moveJoy(e) {
+  const r = joyEl.getBoundingClientRect(), R = r.width / 2, m = R * 0.62;
+  let dx = e.clientX - (r.left + R), dy = e.clientY - (r.top + R);
+  const l = Math.hypot(dx, dy);
+  if (l > m) { dx *= m / l; dy *= m / l; }
+  joy.x = dx / m; joy.y = dy / m;
+  knob.style.transform = `translate(${dx}px, ${dy}px)`;
+}
+joyEl.addEventListener('pointerdown', e => {
+  joy.id = e.pointerId;
+  try { joyEl.setPointerCapture(e.pointerId); } catch (_) {}
+  moveJoy(e); e.preventDefault();
+});
+joyEl.addEventListener('pointermove', e => { if (e.pointerId === joy.id) moveJoy(e); });
+const endJoy = e => { if (e.pointerId !== joy.id) return; joy.id = null; joy.x = joy.y = 0; knob.style.transform = ''; };
+joyEl.addEventListener('pointerup', endJoy);
+joyEl.addEventListener('pointercancel', endJoy);
+const runBtn = document.getElementById('runBtn');
+document.getElementById('jumpBtn').addEventListener('pointerdown', e => { jumpQueued = true; e.preventDefault(); });
+runBtn.addEventListener('pointerdown', e => { runToggle = !runToggle; runBtn.classList.toggle('on', runToggle); e.preventDefault(); });
+for (const el of [joyEl, runBtn, document.getElementById('jumpBtn')]) el.addEventListener('contextmenu', e => e.preventDefault());
+
+let camYaw = 0, camDist = 13, camPitch = 0.42, lookOffset = 0;
+let moveTarget = null;
+const marker = cyl(0.5, 0.5, 0.04, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 }), 0, 0.13, 0, scene, 24);
+marker.castShadow = false; marker.visible = false;
+
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+let down = null;
+const cvs = renderer.domElement;
+cvs.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, drag: false, id: e.pointerId }; cvs.setPointerCapture(e.pointerId); });
+cvs.addEventListener('pointermove', e => {
+  if (!down || e.pointerId !== down.id) return;
+  const dx = e.clientX - down.lx, dy = e.clientY - down.ly;
+  down.lx = e.clientX; down.ly = e.clientY;
+  if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) down.drag = true;
+  if (down.drag) {
+    lookOffset -= dx * 0.006;
+    camPitch = Math.max(0.12, Math.min(1.2, camPitch + dy * 0.004));
+  }
+});
+cvs.addEventListener('pointerup', e => {
+  if (!down || e.pointerId !== down.id) return;
+  if (!down.drag) {
+    ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const hit = new THREE.Vector3();
+    if (ray.ray.intersectPlane(floor, hit)) {
+      collide(hit, 0.4);
+      moveTarget = hit;
+      marker.position.set(hit.x, 0.13, hit.z); marker.visible = true; marker.scale.setScalar(1);
+    }
+  }
+  down = null;
+});
+cvs.addEventListener('wheel', e => { camDist = Math.max(5, Math.min(30, camDist + e.deltaY * 0.01)); e.preventDefault(); }, { passive: false });
+
+/* ---------- 소리 (Web Audio 합성) ---------- */
+const soundBtn = document.getElementById('sound');
+let actx = null, master = null, noiseBuf = null, muted = false;
+function updateBtn() { soundBtn.textContent = !actx ? '🔇 소리 켜기' : muted ? '🔇 소리 꺼짐' : '🔊 소리 켜짐'; }
+
+function startAudio() {
+  if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  actx = new AC();
+  master = actx.createGain(); master.gain.value = muted ? 0 : 0.8; master.connect(actx.destination);
+
+  noiseBuf = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+
+  // 바람 소리
+  const wind = actx.createBufferSource(); wind.buffer = noiseBuf; wind.loop = true;
+  const wf = actx.createBiquadFilter(); wf.type = 'lowpass'; wf.frequency.value = 420;
+  const wg = actx.createGain(); wg.gain.value = 0.06;
+  const lfo = actx.createOscillator(); lfo.frequency.value = 0.08;
+  const lg = actx.createGain(); lg.gain.value = 0.04; lfo.connect(lg).connect(wg.gain);
+  wind.connect(wf).connect(wg).connect(master); wind.start(); lfo.start();
+
+  // 멀리서 들리는 아이들 웅성거림
+  const mur = actx.createBufferSource(); mur.buffer = noiseBuf; mur.loop = true; mur.playbackRate.value = 0.7;
+  const mf = actx.createBiquadFilter(); mf.type = 'bandpass'; mf.frequency.value = 900; mf.Q.value = 1.2;
+  const mg = actx.createGain(); mg.gain.value = 0.012;
+  const lfo2 = actx.createOscillator(); lfo2.frequency.value = 0.31;
+  const lg2 = actx.createGain(); lg2.gain.value = 0.008; lfo2.connect(lg2).connect(mg.gain);
+  mur.connect(mf).connect(mg).connect(master); mur.start(); lfo2.start();
+
+  chime(actx.currentTime + 0.3);
+  scheduleBird();
+  updateBtn();
+}
+
+function bell(freq, t, len = 2.2, vol = 0.18) {
+  const g = actx.createGain(); g.connect(master);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+  for (const [mul, v] of [[1, 1], [2.01, 0.35], [3.02, 0.12]]) {
+    const o = actx.createOscillator(); o.type = 'sine'; o.frequency.value = freq * mul;
+    const og = actx.createGain(); og.gain.value = v;
+    o.connect(og).connect(g); o.start(t); o.stop(t + len);
+  }
+}
+function chime(t) {   // 학교 종소리
+  const n = [659.25, 523.25, 587.33, 392.0, 392.0, 587.33, 659.25, 523.25];
+  n.forEach((f, i) => bell(f, t + i * 0.62 + (i >= 4 ? 0.5 : 0), i === 3 || i === 7 ? 3 : 1.8));
+}
+function bird() {
+  if (!actx) return;
+  let t = actx.currentTime + 0.05;
+  const base = 2600 + Math.random() * 1600, n = 2 + Math.floor(Math.random() * 4);
+  const pan = actx.createStereoPanner ? actx.createStereoPanner() : null;
+  const out = actx.createGain(); out.gain.value = 0.05;
+  if (pan) { pan.pan.value = Math.random() * 1.6 - 0.8; out.connect(pan).connect(master); } else out.connect(master);
+  for (let i = 0; i < n; i++) {
+    const o = actx.createOscillator(); o.type = 'sine';
+    const g = actx.createGain();
+    o.frequency.setValueAtTime(base, t);
+    o.frequency.exponentialRampToValueAtTime(base * (1.3 + Math.random() * 0.4), t + 0.07);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(1, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    o.connect(g).connect(out); o.start(t); o.stop(t + 0.1);
+    t += 0.11 + Math.random() * 0.06;
+  }
+}
+function scheduleBird() { setTimeout(() => { bird(); scheduleBird(); }, 2500 + Math.random() * 5500); }
+function footstep(run) {
+  if (!actx || muted) return;
+  const t = actx.currentTime;
+  const s = actx.createBufferSource(); s.buffer = noiseBuf;
+  const f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 350 + Math.random() * 250; f.Q.value = 0.9;
+  const g = actx.createGain();
+  g.gain.setValueAtTime(run ? 0.35 : 0.25, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+  s.connect(f).connect(g).connect(master);
+  s.start(t, Math.random() * 1.5, 0.1);
+}
+
+function jumpSound() {
+  if (!actx || muted) return;
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(260, t); o.frequency.exponentialRampToValueAtTime(620, t + 0.15);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.12, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+  o.connect(g).connect(master); o.start(t); o.stop(t + 0.22);
+}
+function landSound() {
+  if (!actx || muted) return;
+  const t = actx.currentTime, s = actx.createBufferSource(); s.buffer = noiseBuf;
+  const f = actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 260;
+  const g = actx.createGain(); g.gain.setValueAtTime(0.6, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+  s.connect(f).connect(g).connect(master); s.start(t, Math.random(), 0.18);
+}
+
+addEventListener('pointerdown', e => { if (!e.target.closest('#sound')) startAudio(); });
+soundBtn.addEventListener('click', () => {
+  if (!actx) { muted = false; startAudio(); return; }
+  muted = !muted;
+  master.gain.setTargetAtTime(muted ? 0 : 0.8, actx.currentTime, 0.05);
+  updateBtn();
+});
+
+/* ---------- 매 프레임 ---------- */
+const clock = new THREE.Clock();
+const camPos = new THREE.Vector3(), look = new THREE.Vector3();
+const hint = document.getElementById('hint');
+setTimeout(() => hint.style.opacity = '0', 9000);
+
+let vy = 0, grounded = true;
+const GRAVITY = 24, JUMP_V = 8.5, TURN_RATE = 2.6;
+
+function updatePlayer(dt) {
+  const p = player.g.position;
+  let fwd = 0, turn = 0;
+  if (keys.has('KeyW') || keys.has('ArrowUp')) fwd += 1;
+  if (keys.has('KeyS') || keys.has('ArrowDown')) fwd -= 1;
+  if (keys.has('KeyA') || keys.has('ArrowLeft')) turn += 1;
+  if (keys.has('KeyD') || keys.has('ArrowRight')) turn -= 1;
+  if (joy.id !== null) {
+    const dead = 0.18;
+    if (Math.abs(joy.x) > dead) turn -= joy.x;
+    if (Math.abs(joy.y) > dead) fwd -= joy.y;
+  }
+  fwd = Math.max(-1, Math.min(1, fwd)); turn = Math.max(-1, Math.min(1, turn));
+  const run = keys.has('ShiftLeft') || keys.has('ShiftRight') || runToggle;
+  const speed = run ? 9 : 5;
+
+  // 점프
+  if (jumpQueued && grounded) { vy = JUMP_V; grounded = false; jumpSound(); }
+  jumpQueued = false;
+  if (!grounded) {
+    vy -= GRAVITY * dt; p.y += vy * dt;
+    if (p.y <= 0) { p.y = 0; vy = 0; grounded = true; landSound(); }
+  }
+
+  let moving = false, curSpeed = 0;
+  const bx = p.x, bz2 = p.z;
+  if (fwd || turn) {
+    moveTarget = null; marker.visible = false;
+    player.g.rotation.y += turn * TURN_RATE * dt;
+    if (fwd) {
+      const ry = player.g.rotation.y;
+      curSpeed = speed * Math.abs(fwd) * (fwd < 0 ? 0.55 : 1);
+      p.x += Math.sin(ry) * Math.sign(fwd) * curSpeed * dt;
+      p.z += Math.cos(ry) * Math.sign(fwd) * curSpeed * dt;
+      moving = true;
+    }
+  } else if (moveTarget) {
+    let dx = moveTarget.x - p.x, dz = moveTarget.z - p.z;
+    const len = Math.hypot(dx, dz);
+    if (len < 0.3) { moveTarget = null; marker.visible = false; }
+    else {
+      dx /= len; dz /= len;
+      curSpeed = speed;
+      p.x += dx * speed * dt; p.z += dz * speed * dt;
+      turnToward(player, dx, dz, dt);
+      moving = true;
+    }
+  }
+  if (moving) {
+    collide(p, 0.45);
+    if (moveTarget && Math.hypot(p.x - bx, p.z - bz2) < speed * dt * 0.2) { moveTarget = null; marker.visible = false; }
+  }
+  const before = Math.floor(player.phase / Math.PI);
+  animatePerson(player, dt, moving && grounded, curSpeed);
+  if (!grounded) {   // 공중 자세
+    player.legs[0].rotation.x = 0.6; player.legs[1].rotation.x = -0.35;
+    player.arms[0].rotation.x = -2.4; player.arms[1].rotation.x = -2.4;
+  }
+  if (moving && grounded && Math.floor(player.phase / Math.PI) !== before) footstep(run);
+
+  // 축구공 차기
+  const bdx = soccerBall.position.x - p.x, bdz = soccerBall.position.z - p.z, bd = Math.hypot(bdx, bdz);
+  if (bd < 0.8 && moving && p.y < 0.6) { soccerBall.userData.vx = bdx / bd * speed * 1.4; soccerBall.userData.vz = bdz / bd * speed * 1.4; }
+}
+
+function updateBall(dt) {
+  const u = soccerBall.userData; if (!u.vx && !u.vz) return;
+  const b = soccerBall.position, ox = b.x, oz = b.z;
+  b.x += u.vx * dt; b.z += u.vz * dt;
+  collide(b, 0.3);
+  if (b.x !== ox + u.vx * dt) u.vx *= -0.6;
+  if (b.z !== oz + u.vz * dt) u.vz *= -0.6;
+  const sp = Math.hypot(u.vx, u.vz);
+  soccerBall.rotation.x += u.vz * dt / 0.3; soccerBall.rotation.z -= u.vx * dt / 0.3;
+  const f = Math.max(0, 1 - dt * 1.2); u.vx *= f; u.vz *= f;
+  if (sp < 0.05) u.vx = u.vz = 0;
+}
+
+function updateNpcs(dt) {
+  for (const n of npcs) {
+    const p = n.g.position;
+    if (n.wait > 0) { n.wait -= dt; animatePerson(n, dt, false, 0); continue; }
+    let dx = n.target.x - p.x, dz = n.target.z - p.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 0.5 || n.stuck > 1.5) { n.target = randSpot(); n.wait = 1 + Math.random() * 4; n.stuck = 0; continue; }
+    dx /= d; dz /= d;
+    const sp = 2.2, ox = p.x, oz = p.z;
+    p.x += dx * sp * dt; p.z += dz * sp * dt;
+    // 다른 사람과 겹치지 않게
+    for (const o of [player, ...npcs]) {
+      if (o === n) continue;
+      const q = o.g.position, ex = p.x - q.x, ez = p.z - q.z, e = Math.hypot(ex, ez);
+      if (e < 0.9 && e > 0.0001) { p.x = q.x + ex / e * 0.9; p.z = q.z + ez / e * 0.9; }
+    }
+    collide(p, 0.45);
+    n.stuck = Math.hypot(p.x - ox, p.z - oz) < sp * dt * 0.3 ? n.stuck + dt : 0;
+    turnToward(n, dx, dz, dt);
+    animatePerson(n, dt, true, sp);
+  }
+}
+
+/* 카메라: 캐릭터 뒤 위쪽에서 늦게 따라오고, 방향도 천천히 돈다 */
+const lookCur = new THREE.Vector3(), lookTgt = new THREE.Vector3(), probe = new THREE.Vector3();
+let camY = 0, portrait = innerHeight > innerWidth;
+function camBlocked(v) {
+  for (const s of solids) {
+    if (s.h >= 8 && v.y < s.h + 0.6 && v.x > s.x0 - 0.6 && v.x < s.x1 + 0.6 && v.z > s.z0 - 0.6 && v.z < s.z1 + 0.6) return true;
+  }
+  for (const s of camSolids) {
+    if (v.y < s.h && v.x > s.x0 && v.x < s.x1 && v.z > s.z0 && v.z < s.z1) return true;
+  }
+  return false;
+}
+function updateCamera(dt, snap = false) {
+  const p = player.g.position;
+  if (!down || !down.drag) lookOffset *= 1 - Math.min(1, dt * 1.2);   // 둘러보기 후 천천히 원위치
+  const want = player.g.rotation.y + Math.PI + lookOffset;
+  let d = want - camYaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+  camYaw += snap ? d : d * Math.min(1, dt * 1.8);
+
+  camY += ((snap ? p.y : p.y * 0.45) - camY) * (snap ? 1 : Math.min(1, dt * 3));   // 점프 땐 살짝만 따라 오름
+  const dist = camDist * (portrait ? 1.25 : 1);
+  const lookH = portrait ? 1.0 : 1.6;
+  lookTgt.set(p.x, camY + lookH, p.z);
+  if (snap) lookCur.copy(lookTgt); else lookCur.lerp(lookTgt, Math.min(1, dt * 5));
+
+  const h = Math.sin(camPitch) * dist, r = Math.cos(camPitch) * dist;
+  camPos.set(lookCur.x + Math.sin(camYaw) * r, lookCur.y + h, lookCur.z + Math.cos(camYaw) * r);
+  // 건물 벽 안으로 들어가지 않게 당겨 오기
+  for (let k = 1; k <= 24; k++) {
+    probe.lerpVectors(lookCur, camPos, k / 24);
+    if (camBlocked(probe)) { camPos.lerpVectors(lookCur, camPos, Math.max(0.15, (k - 1) / 24)); break; }
+  }
+  if (snap) camera.position.copy(camPos); else camera.position.lerp(camPos, Math.min(1, dt * 3));
+  camera.lookAt(lookCur);
+}
+function fitView() {
+  portrait = innerHeight > innerWidth;
+  camera.fov = portrait ? 66 : 55;
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+
+function tick() {
+  const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime;
+  updatePlayer(dt);
+  updateNpcs(dt);
+  updateBall(dt);
+  updateCamera(dt);
+
+  flagPivot.rotation.y = Math.sin(t * 2.2) * 0.18;
+  flag.rotation.y = Math.sin(t * 3.1) * 0.12;
+  for (const c of clouds) { c.position.x += c.userData.v * dt; if (c.position.x > 130) c.position.x = -130; }
+  if (marker.visible) marker.scale.setScalar(0.8 + Math.sin(t * 6) * 0.2);
+
+  const now = new Date(), m = now.getMinutes() + now.getSeconds() / 60, hr = (now.getHours() % 12) + m / 60;
+  minHand.rotation.z = -m / 60 * Math.PI * 2;
+  hourHand.rotation.z = -hr / 12 * Math.PI * 2;
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+fitView();
+updateCamera(0, true);
+updateBtn();
+tick();
+
+addEventListener('resize', fitView);
+</script>
+</body>
+</html>
